@@ -1,0 +1,5 @@
+- Luôn bám theo docs/HRM_PRD_SRS_vi_Laravel_PostgreSQL.docx
+- Backend: Laravel + PostgreSQL (pgsql, pdo_pgsql). ORM: Eloquent. JWT (access 15m, refresh 7d). RBAC: ADMIN/HR/MANAGER/EMPLOYEE theo ma trận 2.1.
+- Module: auth, users, departments, orgchart, audit. API & lỗi theo mục 4.
+- DDL theo mục 3 (chuyển cú pháp sang PostgreSQL).
+- Viết migration/seed theo mẫu đã có; ưu tiên Form Request validate; Feature tests tối thiểu cho login/CRUD.
