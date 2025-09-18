@@ -1,0 +1,439 @@
+openapi: 3.1.0
+info:
+  title: HRM REST API
+  version: 1.0.0
+  description: |
+    API cho hệ thống HRM. Chuẩn hóa theo docs/HRM_PRD_SRS_vi_Laravel_PostgreSQL.docx.
+    - Auth: JWT (access 15m, refresh 7d), lockout, revoke.
+    - RBAC: ADMIN/HR/MANAGER/EMPLOYEE.
+    - Audit log, orgchart, soft delete, phân trang/filter.
+servers:
+  - url: http://localhost/api
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+    LoginResponse:
+      type: object
+      properties:
+        access_token:
+          type: string
+        refresh_token:
+          type: string
+        expires_in:
+          type: integer
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        email: { type: string }
+        full_name: { type: string }
+        role: { type: string, enum: [ADMIN, HR, MANAGER, EMPLOYEE] }
+        department_id: { type: integer, nullable: true }
+        is_active: { type: boolean }
+    Department:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        parent_id: { type: integer, nullable: true }
+        head_id: { type: integer, nullable: true }
+    OrgNode:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        type: { type: string, enum: [user, department] }
+        children:
+          type: array
+          items: { $ref: '#/components/schemas/OrgNode' }
+    AuditLog:
+      type: object
+      properties:
+        id: { type: integer }
+        actor_id: { type: integer }
+        resource: { type: string }
+        action: { type: string }
+        before: { type: object }
+        after: { type: object }
+        created_at: { type: string, format: date-time }
+        ip: { type: string }
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/login:
+    post:
+      summary: Đăng nhập
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+            example: { username: "admin", password: "Admin@123" }
+      responses:
+        '200':
+          description: Đăng nhập thành công
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+              example: { access_token: "jwt...", refresh_token: "jwt...", expires_in: 900 }
+        '401':
+          description: Sai thông tin hoặc bị khóa tạm thời
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+              example: { message: "Invalid credentials or account locked" }
+
+  /auth/refresh:
+    post:
+      summary: Làm mới access token
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token: { type: string }
+            example: { refresh_token: "jwt..." }
+      responses:
+        '200':
+          description: Token mới
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '401':
+          description: Refresh token không hợp lệ hoặc bị thu hồi
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /auth/change-password:
+    post:
+      summary: Đổi mật khẩu (yêu cầu JWT)
+      tags: [Auth]
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [old_password, new_password]
+              properties:
+                old_password: { type: string }
+                new_password: { type: string }
+            example: { old_password: "Admin@123", new_password: "NewPass@123" }
+      responses:
+        '200':
+          description: Đổi mật khẩu thành công
+          content:
+            application/json:
+              schema: { type: object, properties: { message: { type: string } } }
+              example: { message: "Password changed" }
+        '400':
+          description: Sai mật khẩu cũ
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /users/me:
+    get:
+      summary: Lấy thông tin user hiện tại
+      tags: [Users]
+      security: [ { bearerAuth: [] } ]
+      responses:
+        '200':
+          description: Thông tin user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+
+  /users:
+    post:
+      summary: Tạo user mới (ADMIN, HR)
+      tags: [Users]
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/User'
+                - required: [username, email, password, full_name, role]
+            example:
+              username: "newuser"
+              email: "new@company.com"
+              password: "User@123"
+              full_name: "Nguyen Van A"
+              role: "EMPLOYEE"
+              department_id: 1
+      responses:
+        '201':
+          description: User đã tạo
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '403':
+          description: Không đủ quyền
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /users/{id}:
+    get:
+      summary: Xem thông tin user (theo RBAC)
+      tags: [Users]
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Thông tin user
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '403':
+          description: Không đủ quyền
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: Không tìm thấy
+
+    put:
+      summary: Cập nhật user (theo RBAC)
+      tags: [Users]
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/User'
+                - required: [full_name]
+            example:
+              full_name: "Nguyen Van B"
+              department_id: 2
+      responses:
+        '200':
+          description: Đã cập nhật
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '403':
+          description: Không đủ quyền
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+    delete:
+      summary: Xóa mềm user (theo RBAC)
+      tags: [Users]
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '204':
+          description: Đã xóa mềm
+        '403':
+          description: Không đủ quyền
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /departments:
+    get:
+      summary: Danh sách phòng ban (phân trang, filter)
+      tags: [Departments]
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer }
+        - name: per_page
+          in: query
+          schema: { type: integer }
+        - name: name
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: Danh sách phòng ban
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Department' }
+                  meta:
+                    type: object
+                    properties:
+                      total: { type: integer }
+                      per_page: { type: integer }
+                      current_page: { type: integer }
+
+    post:
+      summary: Tạo phòng ban (ADMIN, HR)
+      tags: [Departments]
+      security: [ { bearerAuth: [] } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              required: [name]
+              properties:
+                name: { type: string }
+                parent_id: { type: integer }
+                head_id: { type: integer }
+            example:
+              name: "Marketing"
+              parent_id: 1
+              head_id: 2
+      responses:
+        '201':
+          description: Đã tạo phòng ban
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Department' }
+        '403':
+          description: Không đủ quyền
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /departments/{id}:
+    put:
+      summary: Cập nhật phòng ban (ADMIN, HR)
+      tags: [Departments]
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              properties:
+                name: { type: string }
+                parent_id: { type: integer }
+                head_id: { type: integer }
+            example:
+              name: "Kinh doanh"
+              head_id: 3
+      responses:
+        '200':
+          description: Đã cập nhật
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Department' }
+        '403':
+          description: Không đủ quyền
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+    delete:
+      summary: Xóa phòng ban (ADMIN, HR, chỉ khi không có nhân viên)
+      tags: [Departments]
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+      responses:
+        '204':
+          description: Đã xóa
+        '409':
+          description: Không thể xóa do còn nhân viên
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '403':
+          description: Không đủ quyền
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
+  /orgchart:
+    get:
+      summary: Lấy cây tổ chức (theo quyền)
+      tags: [Orgchart]
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - name: root_user_id
+          in: query
+          schema: { type: integer }
+        - name: root_department_id
+          in: query
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Cây tổ chức dạng JSON tree
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OrgNode' }
+
+  /audit-logs:
+    get:
+      summary: Danh sách audit log (ADMIN, HR)
+      tags: [Audit]
+      security: [ { bearerAuth: [] } ]
+      parameters:
+        - name: export
+          in: query
+          schema: { type: string, enum: [csv] }
+      responses:
+        '200':
+          description: Danh sách log hoặc file CSV
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/AuditLog' }
+            text/csv:
+              schema:
+                type: string
+                format: binary
